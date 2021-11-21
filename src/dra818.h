@@ -28,22 +28,24 @@
 #define DRA818_OFF_STATE LOW
 
 #define READ_BUFF_LEN 255
+#define SERIAL_READ_TIMEOUT_MS 500
+
 class dra818 {
 public:
     dra818(uint8_t ptt_pin, uint8_t pd_pin, uint8_t txt_pow_pin);
 
     // Initialize Internal values
-    uint8_t dra818::configure(Stream* serial, float rx_frec, float tx_frec, uint8_t tx_ctcss, uint8_t rx_ctcss, uint8_t sql, uint8_t out_vol, uint8_t mic_vol, bool preemph, bool highpass, bool lowpass);
+    uint8_t configure(Stream* serial, float rx_freq, float tx_freq, uint8_t tx_ctcss, uint8_t rx_ctcss, uint8_t sql, uint8_t out_vol, uint8_t mic_vol, bool preemph, bool highpass, bool lowpass);
 
-    uint8_t begin(Stream* serial);
+    uint8_t begin();
     void ptt(uint8_t state);
     void setModulePowerState(uint8_t power_state);
-    void dra818::setTxtPower(uint8_t power);
+    void setTxtPower(uint8_t power);
     bool modulePresent();
-    bool dra818::writeFreq();
-    bool dra818::setOutputVolume();
-    bool dra818::setMicVolume();
-    bool dra818::setFilters();
+    bool writeFreq();
+    bool setOutputVolume();
+    bool setMicVolume();
+    bool setFilters();
 
 private:
     Stream* serial;
@@ -62,7 +64,6 @@ private:
     uint8_t lowpass;
     void delay_ms(int delay_ms);
 
-    bool sendCommand(char* command, char* reply, uint16_t timeout = default_timeout_ms);
-    bool writeFreq();
+    bool sendCommand(char* command, char* reply);
 };
 #endif
