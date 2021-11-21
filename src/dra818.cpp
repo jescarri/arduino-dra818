@@ -3,39 +3,20 @@
 #include <Stream.h>
 #include <stdio.h>
 
-dra818::dra818(uint8_t ptt_pin, uint8_t pd_pin)
+dra818::dra818(uint8_t ptt_pin, uint8_t pd_pin, uint8_t txt_pow_pin)
 {
     this->ptt_pin = ptt_pin;
     this->pd_pin = pd_pin;
+    this->txt_pow_pin = txt_pow_pin;
 }
 
-//    void start(Stream* serial, uint8_t PTT);
-//    void set_ptt(bool state);
-//    Stream* serial;
-//    uint8_t ptt_pin;
-//    uint8_t tx_ctcss;
-//    uint8_t rx_ctcss;
-//    float tx_freq;
-//    float rx_freq;
-//    uint8_t out_vol;
-//    uint8_t mic_vol;
-//    uint8_t squelch;
-//    uint8_t preemph;
-//    uint8_t highpass;
-//    uint8_t lowpass;
-//    void delay_ms(int delay_ms);
-//#define DRA818_ERR_FREC 1
-//#define DRA818_ERR_VOL 2
-//#define DRA818_ERR_CTCSS 3
-//#define DRA818_ERR_SQL 4
-//#define DRA818_CONF_OK 0
-
-uint8_t dra818::configure(Stream* serial, uint8_t tx_ctcss, uint8_t rx_ctcss, uint8_t sql, uint8_t out_vol, uint8_t mic_vol, bool preemph, bool highpass, bool lowpass)
+uint8_t dra818::configure(Stream* serial, float rx_frec, float tx_frec, uint8_t tx_ctcss, uint8_t rx_ctcss, uint8_t sql, uint8_t out_vol, uint8_t mic_vol, bool preemph, bool highpass, bool lowpass)
 {
     this->serial = serial;
     //Initialize the PTT and PD pins
     pinMode(this->ptt_pin, OUTPUT);
     pinMode(this->pd_pin, OUTPUT);
+    pinMode(this->txt_pow_pin, OUTPUT);
 
     // ToDo: Add better validation of tx/rx frequency, tx and rx should be in the same band.
     if ((tx_freq > 136.0 && tx_freq < 174.00) || (tx_freq > 410.0 && tx_freq < 480.000)) {
@@ -79,44 +60,110 @@ uint8_t dra818::configure(Stream* serial, uint8_t tx_ctcss, uint8_t rx_ctcss, ui
     return DRA818_CONF_OK;
 }
 
+uint8_t begin()
+{
+    setModulePowerState(DRA818_ON);
+    delay_ms(500);
+
+    if (!modulePresent()) {
+	return DRA818_ERR_NOT_PRESENT;
+    }
+    if (!writeFreq()) {
+	return DRA818_ERR_FREC;
+    }
+    if (!setFilters()) {
+	return DRA818_ERR_FILTER_SET;
+    }
+    if (!setOutputVolume()) {
+	return DRA818_ERR_VOL;
+    }
+    return DRA818_CONF_OK;
+}
+
 void dra818::ptt(uint8_t state)
 {
+    ptt(PTT_OFF);
     digitalWrite(this->ptt_pin, state);
+}
+
+void dra818::setModulePowerState(uint8_t power_state)
+{
+    digitalWrite(this->pd_pin, power_state);
+    if (power_state == DRA818_ON_STATE) {
+	delay_ms(500);
+    }
+}
+
+void dra818::setTxtPower(uint8_t power)
+{
+    digitalWrite(this->txt_pow_pin, power);
+}
+
+bool dra818::modulePresent()
+{
+    char buffer[READ_BUFF_LEN];
+    sprintf(buffer, "AT+AT+DMOCONNECT\r\n");
+    return sendCommand(buffer, "+DMOCONNECT:0");
 }
 
 bool dra818::writeFreq()
 {
-    ptt(PTT_OFF);
-    delay_ms(100);
     char rx_freq_buff[10];
     char tx_freq_buff[10];
+    char buffer[READ_BUFF_LEN];
     dtostrf(this->rx_freq, 8, 4, freq_buff);
     dtostrf(this->tx_freq, 8, 4, tx_freq_buff);
-    sprintf(this->buffer, "AT+DMOSETGROUP=0,%s,%s,%04d,%1d,%04d\r\n", tx_freq_buff, rx_freq_buff, this->tx_ctcss, this->squelch, this->rx_ctcss);
-    return sendCommand(this->buffer, "+DMOSETGROUP:0", 100);
+    sprintf(buffer, "AT+DMOSETGROUP=0,%s,%s,%04d,%1d,%04d\r\n", tx_freq_buff, rx_freq_buff, this->tx_ctcss, this->squelch, this->rx_ctcss);
+    return sendCommand(buffer, "+DMOSETGROUP:0", 100);
+}
+
+bool dra818::setOutputVolume()
+{
+    char buffer[READ_BUFF_LEN];
+    sprintf(buffer, "AT+DMOSETVOLUME=%1d\r\n", this->volume);
+    return sendCommand(buffer, "+DMOSETVOLUME:0");
+}
+
+bool dra818::setMicVolume()
+{
+    char buffer[READ_BUFF_LEN];
+    sprintf(buffer, "AT+DMOSETMIC=%1d,0\r\n", this->volume);
+    return sendCommand(buffer, "+DMOSETMIC");
+}
+
+bool dra818::setFilters()
+{
+    char buffer[READ_BUFF_LEN];
+    sprintf(buffer, "AT+SETFILTER=%1d,%1d,%1d\r\n", this->preemph, this->highpass, this->lowpass);
+    return sendCommand(buffer, "+DMOSETFILTER:0");
 }
 
 bool dra818::sendCommand(char* command, char* reply, uint16_t timeout = default_timeout_ms)
 {
-    while (serial->available()) {
+    char readBuffer[READ_BUFF_LEN];
+    unsigned long timer;
+    ptt(PTT_OFF);
+    delay_ms(100);
+    this->serial->flush();
+    while (this->serial->available()) {
 	serial->read();
     }
-    serial->write(command);
-
+    this->serial->write(command);
     uint8_t idx = 0;
-    bool replyMatch = false;
     timer = millis();
-
-    while (!replyMatch && millis() - timer < timeout) {
-	if (serial->available()) {
-	    replybuffer[idx] = serial->read();
+    while (!cmdOk && millis() - timer < timeout) {
+	if (this->serial->available()) {
+	    readBuffer[idx] = this->serial->read();
+	    if (strcmp(readBuffer, reply) == 0) {
+		return true;
+	    }
 	    idx++;
-	    // if (strstr(replybuffer, reply) != NULL) replyMatch = true; // Only checks if desired reply is inside replybuffer
-	    if (strcmp(replybuffer, reply) == 0)
-		replyMatch = true; // This means the reply must start with the desired reply to be successful
+	    if (idx == READ_BUFF_LEN) {
+		return false
+	    }
 	}
     }
-    return replyMatch
+    return false
 }
 
 void dra818::delay_ms(int delay_ms)
